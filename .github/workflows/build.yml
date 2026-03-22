@@ -26,7 +26,7 @@ jobs:
 
       - name: EXE 빌드
         shell: cmd
-        run: pyinstaller --onefile --windowed --name bnkrmall-monitor --hidden-import tkinter monitor.py
+        run: pyinstaller --onefile --windowed --name bnkrmall-monitor --hidden-import selenium --hidden-import webdriver_manager --hidden-import bs4 --hidden-import tkinter monitor.py
 
       - name: 결과물 업로드
         uses: actions/upload-artifact@v4
