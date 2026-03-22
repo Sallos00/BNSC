@@ -1,6 +1,5 @@
 requests
+selenium
+webdriver-manager
 beautifulsoup4
-plyer
-pystray
-Pillow
 pyinstaller
