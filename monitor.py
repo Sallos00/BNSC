@@ -34,10 +34,30 @@ def fetch_products(api_url, keyword, search_type):
     params = {"sword": keyword, "swordList": keyword, "pageNum": 1,
               "searchType": search_type, "sale": "", "reserved": "",
               "soldout": "", "cate": "", "psort": ""}
-    headers = {"Referer": "https://www.bnkrmall.co.kr/", "Accept": "application/json"}
-    res = requests.get(api_url, params=params, headers=headers, timeout=10)
+    headers = {
+        "Referer": "https://www.bnkrmall.co.kr/",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+        "Connection": "keep-alive",
+    }
+    session = requests.Session()
+    # 먼저 메인 페이지 방문 (쿠키 획득)
+    session.get("https://www.bnkrmall.co.kr/", headers=headers, timeout=10)
+    res = session.get(api_url, params=params, headers=headers, timeout=10)
     res.raise_for_status()
-    data = res.json()
+
+    text = res.text.strip()
+    if not text:
+        raise Exception("빈 응답")
+
+    try:
+        data = res.json()
+    except Exception:
+        raise Exception(f"JSON 파싱 실패 (응답: {text[:80]})")
+
     lst = data.get("goodsList") or data.get("list") or data.get("data") or data.get("items") or []
     return [{"id":    str(p.get("goodsNo") or p.get("goodsIdx") or p.get("id", "")),
              "name":  p.get("goodsNm") or p.get("goodsName") or p.get("name", ""),
