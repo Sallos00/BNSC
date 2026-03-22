@@ -22,15 +22,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: EXE 빌드
-        run: |
-          pyinstaller --onefile --windowed ^
-            --hidden-import tkinter ^
-            --hidden-import tkinter.ttk ^
-            --hidden-import requests ^
-            --name "bnkrmall-monitor" ^
-            monitor.py
+        shell: cmd
+        run: pyinstaller --onefile --windowed --name bnkrmall-monitor --hidden-import tkinter monitor.py
 
-      - name: 결과물 업로드 (Artifact)
+      - name: 결과물 업로드
         uses: actions/upload-artifact@v4
         with:
           name: bnkrmall-monitor-exe
