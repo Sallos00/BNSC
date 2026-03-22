@@ -8,6 +8,15 @@ from datetime import datetime
 import sys
 import os
 
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from bs4 import BeautifulSoup
+
 # ── 설정 저장/로드 ────────────────────────────────────────────
 def get_config_path():
     base = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
@@ -24,65 +33,75 @@ def save_config(cfg):
     with open(get_config_path(), 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-# ── bnkrmall API ──────────────────────────────────────────────
-APIS = [
-    {"label": "일반 검색",      "url": "https://www.bnkrmall.co.kr/goods/search_ajax.do",   "type": "Total"},
-    {"label": "프리미엄 반다이", "url": "https://www.bnkrmall.co.kr/goods/search_p_ajax.do", "type": "Premium"},
+# ── Selenium 드라이버 생성 (백그라운드) ──────────────────────
+def create_driver():
+    opts = Options()
+    opts.add_argument("--headless=new")          # 화면에 안 보이게
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--window-size=1280,800")
+    opts.add_argument("--log-level=3")
+    opts.add_argument("--silent")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+    service = Service(ChromeDriverManager().install(), log_path=os.devnull)
+    driver = webdriver.Chrome(service=service, options=opts)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return driver
+
+# ── bnkrmall 검색 ─────────────────────────────────────────────
+TABS = [
+    {"label": "일반 검색",      "search_type": "allTotal",  "tab_param": "Total"},
+    {"label": "프리미엄 반다이", "search_type": "Premium",   "tab_param": "Premium"},
 ]
 
-def fetch_products(api_url, keyword, search_type):
-    params = {"sword": keyword, "swordList": keyword, "pageNum": 1,
-              "searchType": search_type, "sale": "", "reserved": "",
-              "soldout": "", "cate": "", "psort": ""}
-    headers = {
-        "Referer": "https://www.bnkrmall.co.kr/",
-        "Accept": "text/html, application/json, */*; q=0.01",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    session = requests.Session()
-    session.get("https://www.bnkrmall.co.kr/", headers=headers, timeout=10)
-    res = session.get(api_url, params=params, headers=headers, timeout=10)
-    res.raise_for_status()
-    res.encoding = "utf-8"
-    text = res.text.strip()
-    if not text:
-        return []
+def fetch_tab(driver, keyword, search_type):
+    encoded = requests.utils.quote(keyword)
+    url = (f"https://m.bnkrmall.co.kr/mw/goods/search.do"
+           f"?sword={encoded}&searchType={search_type}&pageNum=1")
+    driver.get(url)
 
-    # JSON 응답인 경우
+    # 상품 목록 로딩 대기 (최대 8초)
     try:
-        data = res.json()
-        lst = data.get("goodsList") or data.get("list") or data.get("data") or data.get("items") or []
-        return [{"id":    str(p.get("goodsNo") or p.get("goodsIdx") or p.get("id", "")),
-                 "name":  p.get("goodsNm") or p.get("goodsName") or p.get("name", ""),
-                 "price": f"{int(p['goodsPrice']):,}원" if p.get("goodsPrice") else "",
-                 "url":   f"https://www.bnkrmall.co.kr/goods/detail.do?goodsNo={p.get('goodsNo','')}"}
-                for p in lst]
+        WebDriverWait(driver, 8).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "li.thumb-item, .no-results-wrap"))
+        )
     except Exception:
         pass
 
-    # HTML 응답인 경우 — BeautifulSoup으로 파싱
-    from bs4 import BeautifulSoup
-    soup = BeautifulSoup(text, "html.parser")
+    soup = BeautifulSoup(driver.page_source, "html.parser")
     products = []
 
-    # 상품 li 태그 탐색
-    items = soup.select("li.thumb-item") or soup.select("li[data-goods-no]") or soup.select("li[data-goodsno]")
-    for item in items:
-        goods_no = (item.get("data-goods-no") or item.get("data-goodsno") or "")
-        name_tag = item.select_one(".goods-name") or item.select_one(".prd-name") or item.select_one("a")
-        price_tag = item.select_one(".goods-price") or item.select_one(".price") or item.select_one("strong")
-        name  = name_tag.get_text(strip=True) if name_tag else ""
-        price = price_tag.get_text(strip=True) if price_tag else ""
+    # 상품 없음 체크
+    if soup.select_one(".no-results-wrap.active, .no-results-wrap"):
+        return products
 
-        # goodsNo를 링크에서도 추출 시도
+    items = soup.select("li.thumb-item") or soup.select("li[data-goods-no]")
+    for item in items:
+        goods_no = item.get("data-goods-no") or item.get("data-goodsno") or ""
+
+        # goodsNo를 링크에서 추출
         if not goods_no:
+            import re
             link = item.select_one("a[href*='goodsNo']")
             if link:
-                import re
                 m = re.search(r"goodsNo=(\d+)", link.get("href", ""))
                 if m: goods_no = m.group(1)
+
+        name_tag  = (item.select_one(".goods-name") or item.select_one(".prd-name")
+                     or item.select_one(".item-name") or item.select_one("a"))
+        price_tag = (item.select_one(".goods-price") or item.select_one(".price")
+                     or item.select_one("strong"))
+
+        name  = name_tag.get_text(strip=True)  if name_tag  else ""
+        price = price_tag.get_text(strip=True) if price_tag else ""
 
         if name:
             products.append({
@@ -91,19 +110,18 @@ def fetch_products(api_url, keyword, search_type):
                 "price": price,
                 "url":   f"https://www.bnkrmall.co.kr/goods/detail.do?goodsNo={goods_no}" if goods_no else "",
             })
-
     return products
 
-def check_all(keywords):
+def check_all(driver, keywords):
     results, errors = {}, []
-    for api in APIS:
-        results[api["label"]] = {}
+    for tab in TABS:
+        results[tab["label"]] = {}
         for kw in keywords:
             try:
-                results[api["label"]][kw] = fetch_products(api["url"], kw, api["type"])
+                results[tab["label"]][kw] = fetch_tab(driver, kw, tab["tab_param"])
             except Exception as e:
-                errors.append({"tab": api["label"], "kw": kw, "msg": str(e)})
-                results[api["label"]][kw] = []
+                errors.append({"tab": tab["label"], "kw": kw, "msg": str(e)})
+                results[tab["label"]][kw] = []
     return results, errors
 
 def make_snapshot(results):
@@ -163,29 +181,31 @@ class App(tk.Tk):
         self.monitoring  = False
         self.snapshot    = None
         self.thread      = None
+        self.driver      = None
         self.check_count = 0
-        self.active_tab  = "keywords"
 
         self._build()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        self.monitoring = False
+        if self.driver:
+            try: self.driver.quit()
+            except: pass
+        self.destroy()
 
     # ── 전체 레이아웃 ─────────────────────────────────────────
     def _build(self):
-        # 헤더
         self._build_header()
-        # 탭
         self._build_tabs()
-        # GAS URL
         self._build_gas()
-        # 채널 배지 + 시작버튼 한 줄
         self._build_bottom_bar()
-        # 로그
         self._build_log()
 
     # ── 헤더 ─────────────────────────────────────────────────
     def _build_header(self):
         f = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         f.pack(fill="x", padx=12, pady=(10, 0))
-
         tk.Label(f, text="🛒", bg=SURFACE, fg=TEXT, font=("", 22)).pack(pady=(10, 2))
         tk.Label(f, text="BNKRMALL MONITOR", bg=SURFACE, fg="#ffffff",
                  font=("Courier", 13, "bold")).pack()
@@ -200,7 +220,6 @@ class App(tk.Tk):
         outer = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         outer.pack(fill="x", padx=12, pady=(8, 0))
 
-        # 탭 버튼 행
         btn_row = tk.Frame(outer, bg=SRF2)
         btn_row.pack(fill="x")
         self.tab_btns = {}
@@ -215,18 +234,17 @@ class App(tk.Tk):
             if i < 2:
                 tk.Frame(btn_row, bg=BORDER, width=1).pack(side="left", fill="y")
 
-        # 패널 호스트 (고정 높이)
         self.panel_host = tk.Frame(outer, bg=SURFACE, height=140)
         self.panel_host.pack(fill="x")
         self.panel_host.pack_propagate(False)
 
+        self.panels = {}
         self._build_kw_panel()
         self._build_gmail_panel()
         self._build_interval_panel()
         self._switch_tab("keywords")
 
     def _switch_tab(self, tid):
-        self.active_tab = tid
         for k, btn in self.tab_btns.items():
             btn.configure(bg=SURFACE if k == tid else SRF2,
                           fg=TEXT    if k == tid else MUTED)
@@ -236,7 +254,6 @@ class App(tk.Tk):
 
     # ── 키워드 패널 ──────────────────────────────────────────
     def _build_kw_panel(self):
-        if not hasattr(self, "panels"): self.panels = {}
         p = tk.Frame(self.panel_host, bg=SURFACE)
         self.panels["keywords"] = p
 
@@ -402,14 +419,12 @@ class App(tk.Tk):
 
     # ── 채널 배지 + 시작 버튼 ─────────────────────────────────
     def _build_bottom_bar(self):
-        # 채널 배지
         badge_row = tk.Frame(self, bg=BG)
         badge_row.pack(fill="x", padx=12, pady=(6, 0))
-        for api in APIS:
-            tk.Label(badge_row, text=f"📡 {api['label']}", bg="#071a10", fg="#6ee7b7",
+        for tab in TABS:
+            tk.Label(badge_row, text=f"📡 {tab['label']}", bg="#071a10", fg="#6ee7b7",
                      font=("Courier", 8), padx=8, pady=3, relief="solid", bd=1).pack(side="left", padx=(0, 6))
 
-        # 시작/중지 버튼
         f = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         f.pack(fill="x", padx=12, pady=(6, 0))
         self.start_btn = tk.Button(f, text="🟢 모니터링 시작", bg=ACCENT, fg="#fff",
@@ -475,7 +490,7 @@ class App(tk.Tk):
         self.snapshot    = None
         self.check_count = 0
         self.start_btn.config(text="🔴 중지", bg="#b91c1c")
-        self._log("🟢 모니터링 시작!", "s")
+        self._log("🟢 모니터링 시작! (백그라운드 크롬 초기화 중...)", "s")
         if self.emails: self._log(f"📧 Gmail 알림 → {len(self.emails)}개 주소", "g")
         self._update_live()
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -483,12 +498,25 @@ class App(tk.Tk):
 
     def _stop(self):
         self.monitoring = False
+        if self.driver:
+            try: self.driver.quit()
+            except: pass
+            self.driver = None
         self.start_btn.config(text="🟢 모니터링 시작", bg=ACCENT)
         self.status_lbl.config(text="")
         self._log("🔴 모니터링 중지", "n")
         self._update_live()
 
     def _loop(self):
+        # 드라이버 초기화
+        try:
+            self.driver = create_driver()
+            self._log("✅ 백그라운드 크롬 실행 완료 (화면에 안 보여요)", "s")
+        except Exception as ex:
+            self._log(f"❌ 크롬 초기화 실패: {ex}", "e")
+            self.after(0, self._stop)
+            return
+
         while self.monitoring:
             self._check()
             for i in range(self.interval.get(), 0, -1):
@@ -498,9 +526,9 @@ class App(tk.Tk):
                 time.sleep(1)
 
     def _check(self):
-        self._log("🔍 bnkrmall API 조회 중...", "n")
+        self._log("🔍 bnkrmall 페이지 조회 중...", "n")
         try:
-            results, errors = check_all(self.keywords)
+            results, errors = check_all(self.driver, self.keywords)
             for e in errors: self._log(f"⚠️ [{e['tab']}] {e['kw']}: {e['msg']}", "e")
             snap = make_snapshot(results)
             self.check_count += 1
