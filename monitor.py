@@ -42,7 +42,8 @@ def fetch_products(api_url, keyword, search_type):
     return [{"id":    str(p.get("goodsNo") or p.get("goodsIdx") or p.get("id", "")),
              "name":  p.get("goodsNm") or p.get("goodsName") or p.get("name", ""),
              "price": f"{int(p['goodsPrice']):,}원" if p.get("goodsPrice") else "",
-             "url":   f"https://www.bnkrmall.co.kr/goods/detail.do?goodsNo={p.get('goodsNo','')}"} for p in lst]
+             "url":   f"https://www.bnkrmall.co.kr/goods/detail.do?goodsNo={p.get('goodsNo','')}"}
+            for p in lst]
 
 def check_all(keywords):
     results, errors = {}, []
@@ -78,10 +79,10 @@ def send_to_gas(gas_url, new_items, emails):
     res = requests.post(gas_url, json=payload, timeout=15)
     return res.status_code == 200
 
-# ── 색상 테마 ─────────────────────────────────────────────────
+# ── 색상 ─────────────────────────────────────────────────────
 BG      = "#04050f"
 SURFACE = "#0b0d1f"
-SRF2    = "#16162a"
+SRF2    = "#13142a"
 BORDER  = "#1e2140"
 ACCENT  = "#5b5eff"
 ACCENT2 = "#ff5b8d"
@@ -95,302 +96,300 @@ WARN    = "#fde68a"
 TAG_COLORS = ["#a0a2ff", "#ff9bb8", "#80f8e0", "#ffd080", "#d0a0ff"]
 TAG_BG     = ["#1a1060", "#3a1020", "#0a2a20", "#2a1a00", "#2a1040"]
 
+# ── 메인 앱 ──────────────────────────────────────────────────
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("bnkrmall Monitor")
-        self.geometry("520x740")
-        self.configure(bg=BG)
+        self.geometry("500x680")
         self.resizable(False, False)
+        self.configure(bg=BG)
 
-        self.cfg         = load_config()
-        self.keywords    = list(self.cfg.get("keywords", []))
-        self.emails      = list(self.cfg.get("emails", []))
-        self.gas_url_var = tk.StringVar(value=self.cfg.get("gas_url", ""))
-        self.interval    = tk.IntVar(value=self.cfg.get("interval_seconds", 60))
+        self.cfg       = load_config()
+        self.keywords  = list(self.cfg.get("keywords", []))
+        self.emails    = list(self.cfg.get("emails", []))
+        self.gas_url   = tk.StringVar(value=self.cfg.get("gas_url", ""))
+        self.interval  = tk.IntVar(value=self.cfg.get("interval_seconds", 60))
 
-        self.monitoring   = False
-        self.snapshot     = None
-        self.thread       = None
-        self.check_count  = 0
+        self.monitoring  = False
+        self.snapshot    = None
+        self.thread      = None
+        self.check_count = 0
+        self.active_tab  = "keywords"
 
-        self._build_ui()
+        self._build()
 
-    # ── 스크롤 가능한 메인 프레임 ────────────────────────────
-    def _build_ui(self):
-        canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(self, orient="vertical", command=canvas.yview)
-        self.sf = tk.Frame(canvas, bg=BG)
-        self.sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.sf, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
-
-        self._header()
-        self._tabs()
-        self._gas_section()
-        self._channel_badges()
-        self._control()
-        self._log_section()
+    # ── 전체 레이아웃 ─────────────────────────────────────────
+    def _build(self):
+        # 헤더
+        self._build_header()
+        # 탭
+        self._build_tabs()
+        # GAS URL
+        self._build_gas()
+        # 채널 배지 + 시작버튼 한 줄
+        self._build_bottom_bar()
+        # 로그
+        self._build_log()
 
     # ── 헤더 ─────────────────────────────────────────────────
-    def _header(self):
-        frm = self._card(pady=(16, 0))
-        tk.Label(frm, text="🛒", bg=SURFACE, fg=TEXT, font=("", 26)).pack(pady=(14, 4))
-        tk.Label(frm, text="BNKRMALL MONITOR", bg=SURFACE, fg="#ffffff",
-                 font=("Courier", 14, "bold")).pack()
-        tk.Label(frm, text="실시간 신상품 감시 시스템", bg=SURFACE, fg=TEXT,
-                 font=("Courier", 9)).pack(pady=(2, 0))
-        self.live_lbl = tk.Label(frm, text="● STANDBY", bg=SURFACE, fg=TEXT,
-                                  font=("Courier", 10, "bold"))
-        self.live_lbl.pack(pady=(8, 14))
+    def _build_header(self):
+        f = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        f.pack(fill="x", padx=12, pady=(10, 0))
+
+        tk.Label(f, text="🛒", bg=SURFACE, fg=TEXT, font=("", 22)).pack(pady=(10, 2))
+        tk.Label(f, text="BNKRMALL MONITOR", bg=SURFACE, fg="#ffffff",
+                 font=("Courier", 13, "bold")).pack()
+        tk.Label(f, text="실시간 신상품 감시 시스템", bg=SURFACE, fg=TEXT,
+                 font=("Courier", 8)).pack(pady=(1, 0))
+        self.live_lbl = tk.Label(f, text="● STANDBY", bg=SURFACE, fg=TEXT,
+                                  font=("Courier", 9, "bold"))
+        self.live_lbl.pack(pady=(4, 10))
 
     # ── 탭 ───────────────────────────────────────────────────
-    def _tabs(self):
-        outer = self._card(pady=(10, 0))
+    def _build_tabs(self):
+        outer = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        outer.pack(fill="x", padx=12, pady=(8, 0))
+
+        # 탭 버튼 행
         btn_row = tk.Frame(outer, bg=SRF2)
         btn_row.pack(fill="x")
-
-        self.tab_btns   = {}
-        self.tab_panels = {}
-        tabs = [("keywords", "🔎 감시 키워드"),
-                ("gmail",    "📧 Gmail 알림"),
-                ("interval", "⏱ 감시 주기")]
-
-        for i, (tid, lbl) in enumerate(tabs):
-            b = tk.Button(btn_row, text=lbl, bg=SRF2, fg=MUTED,
-                          font=("Courier", 9), relief="flat", cursor="hand2", bd=0,
-                          activebackground=SURFACE, activeforeground=TEXT,
-                          command=lambda t=tid: self._switch_tab(t))
-            b.pack(side="left", fill="x", expand=True, ipady=9)
-            self.tab_btns[tid] = b
-            if i < len(tabs) - 1:
+        self.tab_btns = {}
+        tabs = [("keywords", "🔎 감시 키워드"), ("gmail", "📧 Gmail 알림"), ("interval", "⏱ 감시 주기")]
+        for i, (tid, tlabel) in enumerate(tabs):
+            btn = tk.Button(btn_row, text=tlabel, bg=SRF2, fg=MUTED,
+                            font=("Courier", 8), relief="flat", cursor="hand2", bd=0,
+                            activebackground=SURFACE, activeforeground=TEXT,
+                            command=lambda t=tid: self._switch_tab(t))
+            btn.pack(side="left", fill="x", expand=True, ipady=7)
+            self.tab_btns[tid] = btn
+            if i < 2:
                 tk.Frame(btn_row, bg=BORDER, width=1).pack(side="left", fill="y")
 
-        self.panel_host = tk.Frame(outer, bg=SURFACE)
+        # 패널 호스트 (고정 높이)
+        self.panel_host = tk.Frame(outer, bg=SURFACE, height=140)
         self.panel_host.pack(fill="x")
+        self.panel_host.pack_propagate(False)
 
-        self._kw_panel()
-        self._gm_panel()
-        self._iv_panel()
+        self._build_kw_panel()
+        self._build_gmail_panel()
+        self._build_interval_panel()
         self._switch_tab("keywords")
 
     def _switch_tab(self, tid):
-        for k, b in self.tab_btns.items():
-            b.configure(bg=SURFACE if k == tid else SRF2,
-                        fg=TEXT    if k == tid else MUTED)
-        for k, p in self.tab_panels.items():
-            if k == tid: p.pack(fill="x", padx=12, pady=10)
-            else:        p.pack_forget()
+        self.active_tab = tid
+        for k, btn in self.tab_btns.items():
+            btn.configure(bg=SURFACE if k == tid else SRF2,
+                          fg=TEXT    if k == tid else MUTED)
+        for k, panel in self.panels.items():
+            if k == tid: panel.place(x=0, y=0, relwidth=1, relheight=1)
+            else:        panel.place_forget()
 
     # ── 키워드 패널 ──────────────────────────────────────────
-    def _kw_panel(self):
+    def _build_kw_panel(self):
+        if not hasattr(self, "panels"): self.panels = {}
         p = tk.Frame(self.panel_host, bg=SURFACE)
-        self.tab_panels["keywords"] = p
+        self.panels["keywords"] = p
 
-        self.kw_tag_frm = tk.Frame(p, bg=SURFACE)
-        self.kw_tag_frm.pack(fill="x", pady=(0, 8))
+        self.kw_tag_frame = tk.Frame(p, bg=SURFACE, height=36)
+        self.kw_tag_frame.pack(fill="x", padx=10, pady=(8, 4))
+        self.kw_tag_frame.pack_propagate(False)
         self._render_kw_tags()
 
         row = tk.Frame(p, bg=SURFACE)
-        row.pack(fill="x")
-        self.kw_ent = self._entry(row, ACCENT)
-        self.kw_ent.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
-        self.kw_ent.bind("<Return>", lambda e: self._add_kw())
-        self._btn(row, "추가", ACCENT, self._add_kw).pack(side="left")
-
-        self.kw_hint = tk.Label(p, text="", bg=SURFACE, fg=MUTED, font=("Courier", 8))
-        self.kw_hint.pack(anchor="w", pady=(4, 0))
+        row.pack(fill="x", padx=10, pady=(0, 8))
+        self.kw_entry = tk.Entry(row, bg="#0d0d1a", fg=TEXT, insertbackground=TEXT,
+                                  relief="flat", font=("", 10),
+                                  highlightbackground=BORDER, highlightthickness=1)
+        self.kw_entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 6))
+        self.kw_entry.bind("<Return>", lambda e: self._add_keyword())
+        self.kw_entry.bind("<FocusIn>",  lambda e: self.kw_entry.configure(highlightbackground=ACCENT))
+        self.kw_entry.bind("<FocusOut>", lambda e: self.kw_entry.configure(highlightbackground=BORDER))
+        tk.Button(row, text="추가", bg=ACCENT, fg="#fff", font=("", 9, "bold"),
+                  relief="flat", cursor="hand2", padx=12, pady=5,
+                  command=self._add_keyword).pack(side="left")
 
     def _render_kw_tags(self):
-        for w in self.kw_tag_frm.winfo_children(): w.destroy()
+        for w in self.kw_tag_frame.winfo_children(): w.destroy()
         if not self.keywords:
-            tk.Label(self.kw_tag_frm, text="// 키워드를 추가해주세요",
-                     bg=SURFACE, fg=MUTED, font=("Courier", 9)).pack(anchor="w", pady=4)
+            tk.Label(self.kw_tag_frame, text="// 키워드를 추가해주세요",
+                     bg=SURFACE, fg=MUTED, font=("Courier", 9)).pack(anchor="w", pady=6)
             return
-        wrap = tk.Frame(self.kw_tag_frm, bg=SURFACE)
-        wrap.pack(fill="x")
         for i, kw in enumerate(self.keywords):
-            c, bg = TAG_COLORS[i % len(TAG_COLORS)], TAG_BG[i % len(TAG_BG)]
-            tag = tk.Frame(wrap, bg=bg, padx=8, pady=3)
-            tag.pack(side="left", padx=(0, 6), pady=2)
-            tk.Label(tag, text=kw, bg=bg, fg=c, font=("Courier", 10)).pack(side="left")
+            c, b = TAG_COLORS[i % len(TAG_COLORS)], TAG_BG[i % len(TAG_BG)]
+            tag = tk.Frame(self.kw_tag_frame, bg=b, padx=7, pady=2)
+            tag.pack(side="left", padx=(0, 5))
+            tk.Label(tag, text=kw, bg=b, fg=c, font=("Courier", 9)).pack(side="left")
             if not self.monitoring:
-                tk.Button(tag, text="×", bg=bg, fg=c, relief="flat", font=("", 11),
-                          cursor="hand2", command=lambda k=kw: self._rm_kw(k)).pack(side="left", padx=(4, 0))
+                tk.Button(tag, text="×", bg=b, fg=c, relief="flat", font=("", 10),
+                          cursor="hand2", command=lambda k=kw: self._remove_keyword(k)).pack(side="left")
 
-    def _add_kw(self):
-        kw = self.kw_ent.get().strip()
+    def _add_keyword(self):
+        kw = self.kw_entry.get().strip()
         if not kw or kw in self.keywords: return
         self.keywords.append(kw)
-        self.kw_ent.delete(0, tk.END)
+        self.kw_entry.delete(0, tk.END)
         self._render_kw_tags()
         self._save()
 
-    def _rm_kw(self, kw):
+    def _remove_keyword(self, kw):
         if self.monitoring: return
         self.keywords.remove(kw)
         self._render_kw_tags()
         self._save()
 
     # ── Gmail 패널 ───────────────────────────────────────────
-    def _gm_panel(self):
+    def _build_gmail_panel(self):
         p = tk.Frame(self.panel_host, bg=SURFACE)
-        self.tab_panels["gmail"] = p
+        self.panels["gmail"] = p
 
-        tk.Label(p, text="신상품 감지 시 아래 이메일로 알림을 보내요.",
-                 bg=SURFACE, fg=MUTED, font=("", 9), wraplength=380, justify="left").pack(anchor="w", pady=(0, 8))
-
-        self.em_tag_frm = tk.Frame(p, bg=SURFACE)
-        self.em_tag_frm.pack(fill="x", pady=(0, 8))
+        self.em_tag_frame = tk.Frame(p, bg=SURFACE, height=36)
+        self.em_tag_frame.pack(fill="x", padx=10, pady=(8, 4))
+        self.em_tag_frame.pack_propagate(False)
         self._render_em_tags()
 
         row = tk.Frame(p, bg=SURFACE)
-        row.pack(fill="x")
-        self.em_ent = self._entry(row, ACCENT2)
-        self.em_ent.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
-        self.em_ent.bind("<Return>", lambda e: self._add_em())
-        self._btn(row, "추가", ACCENT2, self._add_em).pack(side="left")
+        row.pack(fill="x", padx=10, pady=(0, 4))
+        self.em_entry = tk.Entry(row, bg="#0d0d1a", fg=TEXT, insertbackground=TEXT,
+                                  relief="flat", font=("", 10),
+                                  highlightbackground=BORDER, highlightthickness=1)
+        self.em_entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 6))
+        self.em_entry.bind("<Return>", lambda e: self._add_email())
+        self.em_entry.bind("<FocusIn>",  lambda e: self.em_entry.configure(highlightbackground=ACCENT2))
+        self.em_entry.bind("<FocusOut>", lambda e: self.em_entry.configure(highlightbackground=BORDER))
+        tk.Button(row, text="추가", bg=ACCENT2, fg="#fff", font=("", 9, "bold"),
+                  relief="flat", cursor="hand2", padx=12, pady=5,
+                  command=self._add_email).pack(side="left")
 
         self.em_err = tk.Label(p, text="", bg=SURFACE, fg=ERROR, font=("Courier", 8))
-        self.em_err.pack(anchor="w", pady=(4, 0))
-
-        self.em_status = tk.Label(p, text="— Gmail 알림 미설정", bg=SURFACE,
-                                   fg=MUTED, font=("Courier", 9))
-        self.em_status.pack(anchor="w", pady=(6, 0))
+        self.em_err.pack(anchor="w", padx=10)
 
     def _render_em_tags(self):
-        for w in self.em_tag_frm.winfo_children(): w.destroy()
+        for w in self.em_tag_frame.winfo_children(): w.destroy()
         if not self.emails:
-            tk.Label(self.em_tag_frm, text="// 이메일을 추가해주세요",
-                     bg=SURFACE, fg=MUTED, font=("Courier", 9)).pack(anchor="w", pady=4)
+            tk.Label(self.em_tag_frame, text="// 이메일을 추가해주세요",
+                     bg=SURFACE, fg=MUTED, font=("Courier", 9)).pack(anchor="w", pady=6)
             return
-        wrap = tk.Frame(self.em_tag_frm, bg=SURFACE)
-        wrap.pack(fill="x")
         for i, em in enumerate(self.emails):
-            c, bg = TAG_COLORS[i % len(TAG_COLORS)], TAG_BG[i % len(TAG_BG)]
-            tag = tk.Frame(wrap, bg=bg, padx=8, pady=3)
-            tag.pack(side="left", padx=(0, 6), pady=2)
-            tk.Label(tag, text=em, bg=bg, fg=c, font=("Courier", 9)).pack(side="left")
+            c, b = TAG_COLORS[i % len(TAG_COLORS)], TAG_BG[i % len(TAG_BG)]
+            tag = tk.Frame(self.em_tag_frame, bg=b, padx=7, pady=2)
+            tag.pack(side="left", padx=(0, 5))
+            tk.Label(tag, text=em, bg=b, fg=c, font=("Courier", 9)).pack(side="left")
             if not self.monitoring:
-                tk.Button(tag, text="×", bg=bg, fg=c, relief="flat", font=("", 11),
-                          cursor="hand2", command=lambda e=em: self._rm_em(e)).pack(side="left", padx=(4, 0))
-        self.em_status.config(text=f"✅ {len(self.emails)}개 주소로 알림 발송", fg=ACCENT3)
+                tk.Button(tag, text="×", bg=b, fg=c, relief="flat", font=("", 10),
+                          cursor="hand2", command=lambda e=em: self._remove_email(e)).pack(side="left")
 
-    def _add_em(self):
-        em = self.em_ent.get().strip()
+    def _add_email(self):
+        em = self.em_entry.get().strip()
         if not em: return
         if "@" not in em or "." not in em:
             self.em_err.config(text="⚠ 올바른 이메일 형식이 아니에요"); return
         if em in self.emails:
             self.em_err.config(text="⚠ 이미 추가된 이메일이에요"); return
         self.emails.append(em)
-        self.em_ent.delete(0, tk.END)
+        self.em_entry.delete(0, tk.END)
         self.em_err.config(text="")
         self._render_em_tags()
         self._save()
 
-    def _rm_em(self, em):
+    def _remove_email(self, em):
         if self.monitoring: return
         self.emails.remove(em)
         self._render_em_tags()
         self._save()
 
     # ── 감시 주기 패널 ────────────────────────────────────────
-    def _iv_panel(self):
+    def _build_interval_panel(self):
         p = tk.Frame(self.panel_host, bg=SURFACE)
-        self.tab_panels["interval"] = p
+        self.panels["interval"] = p
 
-        options = [(30, "30초", "빠른 감시"), (60, "1분", "권장"),
-                   (180, "3분", "보통"),      (300, "5분", "느린 감시")]
+        options = [(30,"30초","빠른 감시"),(60,"1분","권장"),(180,"3분","보통"),(300,"5분","느린 감시")]
         grid = tk.Frame(p, bg=SURFACE)
-        grid.pack(fill="x")
-        self.iv_btns = {}
+        grid.pack(fill="x", padx=10, pady=8)
+        self.int_btns = {}
 
         for i, (val, lbl, desc) in enumerate(options):
             r, c = divmod(i, 2)
             active = self.interval.get() == val
             bf = tk.Frame(grid, bg=ACCENT if active else "#0d0d1a",
                           highlightbackground=ACCENT if active else BORDER, highlightthickness=1)
-            bf.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
+            bf.grid(row=r, column=c, padx=3, pady=3, sticky="nsew")
             grid.columnconfigure(c, weight=1)
-            inner = tk.Frame(bf, bg=bf["bg"])
-            inner.pack(expand=True, fill="both", padx=12, pady=10)
-            fg = "#fff" if active else MUTED
-            tk.Label(inner, text=lbl,  bg=inner["bg"], fg=fg, font=("Courier", 13, "bold")).pack()
-            tk.Label(inner, text=desc, bg=inner["bg"], fg=fg, font=("Courier", 8)).pack()
-            for w in [bf, inner] + list(inner.winfo_children()):
-                w.bind("<Button-1>", lambda e, v=val: self._set_iv(v))
+            inn = tk.Frame(bf, bg=bf["bg"])
+            inn.pack(expand=True, fill="both", padx=8, pady=6)
+            tk.Label(inn, text=lbl, bg=inn["bg"], fg="#fff" if active else MUTED,
+                     font=("Courier", 11, "bold")).pack()
+            tk.Label(inn, text=desc, bg=inn["bg"], fg="#fff" if active else MUTED,
+                     font=("Courier", 7)).pack()
+            for w in [bf, inn] + list(inn.winfo_children()):
+                w.bind("<Button-1>", lambda e, v=val: self._set_interval(v))
                 w.configure(cursor="hand2")
-            self.iv_btns[val] = (bf, inner)
+            self.int_btns[val] = (bf, inn)
 
-    def _set_iv(self, val):
+    def _set_interval(self, val):
         if self.monitoring: return
         self.interval.set(val)
-        for v, (bf, inner) in self.iv_btns.items():
+        for v, (bf, inn) in self.int_btns.items():
             active = v == val
-            color  = ACCENT if active else "#0d0d1a"
-            fg     = "#fff" if active else MUTED
-            bf.configure(bg=color, highlightbackground=ACCENT if active else BORDER)
-            inner.configure(bg=color)
-            for w in inner.winfo_children(): w.configure(bg=color, fg=fg)
+            col = ACCENT if active else "#0d0d1a"
+            fg  = "#fff" if active else MUTED
+            bf.configure(bg=col, highlightbackground=ACCENT if active else BORDER)
+            inn.configure(bg=col)
+            for w in inn.winfo_children(): w.configure(bg=col, fg=fg)
         self._save()
 
     # ── GAS URL ───────────────────────────────────────────────
-    def _gas_section(self):
-        frm = self._card(pady=(10, 0))
-        tk.Label(frm, text="GOOGLE APPS SCRIPT URL", bg=SURFACE, fg=MUTED,
-                 font=("Courier", 8)).pack(anchor="w", padx=12, pady=(10, 4))
-        ent = self._entry(frm, ACCENT3, textvariable=self.gas_url_var)
-        ent.pack(fill="x", padx=12, pady=(0, 10), ipady=6)
-        ent.bind("<FocusOut>", lambda e: self._save())
+    def _build_gas(self):
+        f = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        f.pack(fill="x", padx=12, pady=(8, 0))
+        tk.Label(f, text="GOOGLE APPS SCRIPT URL", bg=SURFACE, fg=MUTED,
+                 font=("Courier", 8)).pack(anchor="w", padx=10, pady=(7, 2))
+        e = tk.Entry(f, textvariable=self.gas_url, bg="#0d0d1a", fg=TEXT,
+                     insertbackground=TEXT, relief="flat", font=("", 10),
+                     highlightbackground=BORDER, highlightthickness=1)
+        e.pack(fill="x", padx=10, pady=(0, 8), ipady=5)
+        e.bind("<FocusIn>",  lambda ev: e.configure(highlightbackground=ACCENT3))
+        e.bind("<FocusOut>", lambda ev: (e.configure(highlightbackground=BORDER), self._save()))
 
-    # ── 채널 배지 ─────────────────────────────────────────────
-    def _channel_badges(self):
-        frm = tk.Frame(self.sf, bg=BG)
-        frm.pack(fill="x", padx=16, pady=(8, 0))
+    # ── 채널 배지 + 시작 버튼 ─────────────────────────────────
+    def _build_bottom_bar(self):
+        # 채널 배지
+        badge_row = tk.Frame(self, bg=BG)
+        badge_row.pack(fill="x", padx=12, pady=(6, 0))
         for api in APIS:
-            tk.Label(frm, text=f"📡 {api['label']}", bg="#071a10", fg="#6ee7b7",
-                     font=("Courier", 9), padx=10, pady=3,
-                     relief="solid", bd=1).pack(side="left", padx=(0, 6))
+            tk.Label(badge_row, text=f"📡 {api['label']}", bg="#071a10", fg="#6ee7b7",
+                     font=("Courier", 8), padx=8, pady=3, relief="solid", bd=1).pack(side="left", padx=(0, 6))
 
-    # ── 시작/중지 ─────────────────────────────────────────────
-    def _control(self):
-        frm = self._card(pady=(10, 0))
-        self.start_btn = tk.Button(frm, text="🟢 모니터링 시작", bg=ACCENT, fg="#fff",
-                                    font=("", 12, "bold"), relief="flat", cursor="hand2",
-                                    command=self._toggle, pady=12)
-        self.start_btn.pack(fill="x", padx=12, pady=12)
-        self.status_lbl = tk.Label(frm, text="", bg=SURFACE, fg=ACCENT, font=("Courier", 9))
-        self.status_lbl.pack(pady=(0, 10))
-
-    def _toggle(self):
-        if self.monitoring: self._stop()
-        else: self._start()
+        # 시작/중지 버튼
+        f = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        f.pack(fill="x", padx=12, pady=(6, 0))
+        self.start_btn = tk.Button(f, text="🟢 모니터링 시작", bg=ACCENT, fg="#fff",
+                                    font=("", 11, "bold"), relief="flat", cursor="hand2",
+                                    command=self._toggle, pady=10)
+        self.start_btn.pack(fill="x", padx=10, pady=(10, 4))
+        self.status_lbl = tk.Label(f, text="", bg=SURFACE, fg=ACCENT, font=("Courier", 8))
+        self.status_lbl.pack(pady=(0, 8))
 
     # ── 로그 ─────────────────────────────────────────────────
-    def _log_section(self):
-        frm = self._card(pady=(10, 0))
-        hdr = tk.Frame(frm, bg=SURFACE)
-        hdr.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Label(hdr, text="시스템 로그", bg=SURFACE, fg=MUTED, font=("Courier", 9)).pack(side="left")
-        self.log_cnt = tk.Label(hdr, text="", bg=SURFACE, fg=ACCENT, font=("Courier", 9))
-        self.log_cnt.pack(side="right")
+    def _build_log(self):
+        f = tk.Frame(self, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        f.pack(fill="both", expand=True, padx=12, pady=(6, 10))
 
-        self.log_txt = tk.Text(frm, bg="#04050f", fg=TEXT, font=("Courier", 9),
-                                relief="flat", height=12, state="disabled",
-                                wrap="word", insertbackground=TEXT)
-        self.log_txt.pack(fill="x", padx=12, pady=(0, 10))
-        for tag, fg in [("s", SUCCESS), ("e", ERROR), ("a", ACCENT2),
-                        ("i", "#93c5fd"), ("g", WARN), ("t", MUTED), ("n", MUTED)]:
-            self.log_txt.tag_configure(tag, foreground=fg)
+        hdr = tk.Frame(f, bg=SURFACE)
+        hdr.pack(fill="x", padx=10, pady=(7, 3))
+        tk.Label(hdr, text="시스템 로그", bg=SURFACE, fg=MUTED, font=("Courier", 8)).pack(side="left")
+        self.log_count_lbl = tk.Label(hdr, text="", bg=SURFACE, fg=ACCENT, font=("Courier", 8))
+        self.log_count_lbl.pack(side="right")
 
-        tk.Label(self.sf, text="bnkrmall Realtime Monitor", bg=BG, fg="#151728",
-                 font=("Courier", 8)).pack(pady=(8, 16))
+        self.log_txt = tk.Text(f, bg="#04050f", fg=TEXT, font=("Courier", 9),
+                                relief="flat", state="disabled", wrap="word",
+                                insertbackground=TEXT)
+        self.log_txt.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        for tag, color in [("s", SUCCESS),("e", ERROR),("a", ACCENT2),
+                            ("i", "#93c5fd"),("g", WARN),("t", MUTED),("n", MUTED)]:
+            self.log_txt.tag_configure(tag, foreground=color)
 
-    # ── 로그 추가 ────────────────────────────────────────────
+    # ── 로그 추가 ─────────────────────────────────────────────
     def _log(self, msg, tag="n"):
         def _do():
             t = datetime.now().strftime("%H:%M:%S")
@@ -400,10 +399,25 @@ class App(tk.Tk):
             self.log_txt.configure(state="disabled")
             self.log_txt.see("end")
             lines = int(self.log_txt.index("end-1c").split(".")[0])
-            self.log_cnt.config(text=f"▶ {lines}건")
+            self.log_count_lbl.config(text=f"▶ {lines}건")
         self.after(0, _do)
 
-    # ── 모니터링 ─────────────────────────────────────────────
+    # ── 유틸 ─────────────────────────────────────────────────
+    def _save(self):
+        save_config({"keywords": self.keywords, "emails": self.emails,
+                     "interval_seconds": self.interval.get(), "gas_url": self.gas_url.get()})
+
+    def _update_live(self):
+        if self.monitoring:
+            self.live_lbl.config(text=f"● LIVE · {self.check_count}회 완료", fg=ACCENT3)
+        else:
+            self.live_lbl.config(text="● STANDBY", fg=TEXT)
+
+    # ── 시작/중지 ─────────────────────────────────────────────
+    def _toggle(self):
+        if self.monitoring: self._stop()
+        else:               self._start()
+
     def _start(self):
         if not self.keywords:
             messagebox.showwarning("경고", "키워드를 먼저 추가해주세요!"); return
@@ -428,8 +442,7 @@ class App(tk.Tk):
     def _loop(self):
         while self.monitoring:
             self._check()
-            iv = self.interval.get()
-            for i in range(iv, 0, -1):
+            for i in range(self.interval.get(), 0, -1):
                 if not self.monitoring: return
                 self.after(0, lambda s=i: self.status_lbl.config(
                     text=f"다음 검색까지 {s // 60}:{s % 60:02d}"))
@@ -439,74 +452,39 @@ class App(tk.Tk):
         self._log("🔍 bnkrmall API 조회 중...", "n")
         try:
             results, errors = check_all(self.keywords)
-            for e in errors:
-                self._log(f"⚠️  [{e['tab']}] {e['kw']}: {e['msg']}", "e")
+            for e in errors: self._log(f"⚠️ [{e['tab']}] {e['kw']}: {e['msg']}", "e")
             snap = make_snapshot(results)
             self.check_count += 1
             self.after(0, self._update_live)
 
             if self.snapshot is None:
-                total = sum(len(lst) for tab in results.values() for lst in tab.values())
-                self._log(f"✅ 기준 수집 완료 — 총 {total}개 상품", "s")
+                total = sum(len(l) for tab in results.values() for l in tab.values())
+                self._log(f"✅ 기준 수집 완료 — 총 {total}개", "s")
                 for tl, tab in results.items():
-                    for kw, lst in tab.items():
-                        self._log(f"   📂 [{tl}] \"{kw}\" → {len(lst)}개", "i")
+                    for kw, l in tab.items():
+                        self._log(f"   📂 [{tl}] \"{kw}\" → {len(l)}개", "i")
                 self.snapshot = snap
             else:
                 new_items = find_new(self.snapshot, results)
                 if new_items:
                     self._log(f"🚨 신상품 {len(new_items)}개 발견!", "a")
-                    for p in new_items:
-                        self._log(f"   🆕 [{p['tab']}] {p['name']} {p['price']}", "a")
+                    for p in new_items: self._log(f"   🆕 [{p['tab']}] {p['name']} {p['price']}", "a")
                     self.snapshot = snap
-                    gas = self.gas_url_var.get().strip()
+                    gas = self.gas_url.get().strip()
                     if gas and self.emails:
                         self._log(f"📧 Gmail 발송 중 → {len(self.emails)}개 주소", "g")
                         try:
                             ok = send_to_gas(gas, new_items, self.emails)
-                            self._log("✅ Gmail 발송 완료!" if ok else "⚠️  발송 결과 불명확",
-                                      "s" if ok else "g")
+                            self._log("✅ Gmail 발송 완료!" if ok else "⚠️ 발송 결과 불명확", "s" if ok else "g")
                         except Exception as ex:
                             self._log(f"❌ GAS 오류: {ex}", "e")
                     elif not gas:
-                        self._log("⚠️  GAS URL 미설정 — 이메일 발송 건너뜀", "g")
+                        self._log("⚠️ GAS URL 미설정 — 이메일 발송 건너뜀", "g")
                 else:
-                    total = sum(len(lst) for tab in results.values() for lst in tab.values())
+                    total = sum(len(l) for tab in results.values() for l in tab.values())
                     self._log(f"✅ 변동 없음 ({total}개)", "s")
         except Exception as ex:
             self._log(f"❌ 오류: {ex}", "e")
 
-    def _update_live(self):
-        if self.monitoring:
-            self.live_lbl.config(text=f"● LIVE · {self.check_count}회 완료", fg=ACCENT3)
-        else:
-            self.live_lbl.config(text="● STANDBY", fg=TEXT)
-
-    # ── 공통 위젯 헬퍼 ───────────────────────────────────────
-    def _card(self, pady=(10, 0)):
-        frm = tk.Frame(self.sf, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        frm.pack(fill="x", padx=16, pady=pady)
-        return frm
-
-    def _entry(self, parent, focus_color, textvariable=None):
-        kw = {"textvariable": textvariable} if textvariable else {}
-        ent = tk.Entry(parent, bg="#0d0d1a", fg=TEXT, insertbackground=TEXT,
-                       relief="flat", font=("", 11),
-                       highlightbackground=BORDER, highlightthickness=1, **kw)
-        ent.bind("<FocusIn>",  lambda e: ent.configure(highlightbackground=focus_color))
-        ent.bind("<FocusOut>", lambda e: ent.configure(highlightbackground=BORDER))
-        return ent
-
-    def _btn(self, parent, text, color, cmd):
-        return tk.Button(parent, text=text, bg=color, fg="#fff",
-                         font=("", 10, "bold"), relief="flat", cursor="hand2",
-                         command=cmd, padx=14, pady=6)
-
-    def _save(self):
-        save_config({"keywords": self.keywords, "emails": self.emails,
-                     "interval_seconds": self.interval.get(),
-                     "gas_url": self.gas_url_var.get()})
-
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    App().mainloop()
