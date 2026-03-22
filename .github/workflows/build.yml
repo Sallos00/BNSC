@@ -26,7 +26,27 @@ jobs:
 
       - name: EXE 빌드
         shell: cmd
-        run: pyinstaller --onefile --windowed --name bnkrmall-monitor --hidden-import selenium --hidden-import webdriver_manager --hidden-import bs4 --hidden-import tkinter monitor.py
+        run: >
+          pyinstaller --onefile --windowed --name bnkrmall-monitor
+          --hidden-import selenium
+          --hidden-import selenium.webdriver
+          --hidden-import selenium.webdriver.chrome
+          --hidden-import selenium.webdriver.chrome.webdriver
+          --hidden-import selenium.webdriver.chrome.options
+          --hidden-import selenium.webdriver.chrome.service
+          --hidden-import selenium.webdriver.common.by
+          --hidden-import selenium.webdriver.support.ui
+          --hidden-import selenium.webdriver.support.expected_conditions
+          --hidden-import selenium.webdriver.support
+          --hidden-import webdriver_manager
+          --hidden-import webdriver_manager.chrome
+          --hidden-import bs4
+          --hidden-import beautifulsoup4
+          --hidden-import tkinter
+          --hidden-import requests
+          --collect-all selenium
+          --collect-all webdriver_manager
+          monitor.py
 
       - name: 결과물 업로드
         uses: actions/upload-artifact@v4
