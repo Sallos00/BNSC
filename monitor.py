@@ -36,34 +36,63 @@ def fetch_products(api_url, keyword, search_type):
               "soldout": "", "cate": "", "psort": ""}
     headers = {
         "Referer": "https://www.bnkrmall.co.kr/",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept": "text/html, application/json, */*; q=0.01",
+        "Accept-Language": "ko-KR,ko;q=0.9",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "X-Requested-With": "XMLHttpRequest",
-        "Connection": "keep-alive",
     }
     session = requests.Session()
-    # 먼저 메인 페이지 방문 (쿠키 획득)
     session.get("https://www.bnkrmall.co.kr/", headers=headers, timeout=10)
     res = session.get(api_url, params=params, headers=headers, timeout=10)
     res.raise_for_status()
-
+    res.encoding = "utf-8"
     text = res.text.strip()
     if not text:
-        raise Exception("빈 응답")
+        return []
 
+    # JSON 응답인 경우
     try:
         data = res.json()
+        lst = data.get("goodsList") or data.get("list") or data.get("data") or data.get("items") or []
+        return [{"id":    str(p.get("goodsNo") or p.get("goodsIdx") or p.get("id", "")),
+                 "name":  p.get("goodsNm") or p.get("goodsName") or p.get("name", ""),
+                 "price": f"{int(p['goodsPrice']):,}원" if p.get("goodsPrice") else "",
+                 "url":   f"https://www.bnkrmall.co.kr/goods/detail.do?goodsNo={p.get('goodsNo','')}"}
+                for p in lst]
     except Exception:
-        raise Exception(f"JSON 파싱 실패 (응답: {text[:80]})")
+        pass
 
-    lst = data.get("goodsList") or data.get("list") or data.get("data") or data.get("items") or []
-    return [{"id":    str(p.get("goodsNo") or p.get("goodsIdx") or p.get("id", "")),
-             "name":  p.get("goodsNm") or p.get("goodsName") or p.get("name", ""),
-             "price": f"{int(p['goodsPrice']):,}원" if p.get("goodsPrice") else "",
-             "url":   f"https://www.bnkrmall.co.kr/goods/detail.do?goodsNo={p.get('goodsNo','')}"}
-            for p in lst]
+    # HTML 응답인 경우 — BeautifulSoup으로 파싱
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(text, "html.parser")
+    products = []
+
+    # 상품 li 태그 탐색
+    items = soup.select("li.thumb-item") or soup.select("li[data-goods-no]") or soup.select("li[data-goodsno]")
+    for item in items:
+        goods_no = (item.get("data-goods-no") or item.get("data-goodsno") or "")
+        name_tag = item.select_one(".goods-name") or item.select_one(".prd-name") or item.select_one("a")
+        price_tag = item.select_one(".goods-price") or item.select_one(".price") or item.select_one("strong")
+        name  = name_tag.get_text(strip=True) if name_tag else ""
+        price = price_tag.get_text(strip=True) if price_tag else ""
+
+        # goodsNo를 링크에서도 추출 시도
+        if not goods_no:
+            link = item.select_one("a[href*='goodsNo']")
+            if link:
+                import re
+                m = re.search(r"goodsNo=(\d+)", link.get("href", ""))
+                if m: goods_no = m.group(1)
+
+        if name:
+            products.append({
+                "id":    goods_no or name,
+                "name":  name,
+                "price": price,
+                "url":   f"https://www.bnkrmall.co.kr/goods/detail.do?goodsNo={goods_no}" if goods_no else "",
+            })
+
+    return products
 
 def check_all(keywords):
     results, errors = {}, []
